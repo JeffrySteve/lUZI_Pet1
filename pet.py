@@ -1,13 +1,13 @@
 import sys
 import os
 import random
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget
-from PyQt5.QtGui import QMovie
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QGraphicsDropShadowEffect
+from PyQt5.QtGui import QMovie, QColor
 from PyQt5.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QSize, QTime
 
 class PopupLabel(QLabel):
     def __init__(self, parent=None):
-        QLabel.__init__(self, parent)
+        super(PopupLabel, self).__init__(parent)
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -19,7 +19,7 @@ class PopupLabel(QLabel):
 
 class VirtualCat(QWidget):
     def __init__(self):
-        QWidget.__init__(self)
+        super(VirtualCat, self).__init__(parent=None)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -45,6 +45,7 @@ class VirtualCat(QWidget):
         # Initialize state flags
         self.is_initialized = False
         self.is_moving = False
+        self.popup_message_queue = []  # Add message queue to prevent spam
 
         try:
             # Load and validate all animations first
@@ -127,6 +128,11 @@ class VirtualCat(QWidget):
 
     def show_popup(self, message):
         """Thread-safe popup display"""
+        if hasattr(self, 'popup') and self.popup:
+            # Queue message instead of showing immediately if popup exists
+            self.popup_message_queue.append(message)
+            return
+            
         try:
             self.cleanup_popup()  # Clean existing popup first
             if not self.is_sleeping:
@@ -135,35 +141,35 @@ class VirtualCat(QWidget):
             self.popup = PopupLabel()
             self.popup.setText(message)
             self.popup.setWordWrap(True)
+            
+            # Simpler, more reliable styling
             self.popup.setStyleSheet("""
                 QLabel {
-                    background-color: qlineargradient(
-                        x1: 0, y1: 0, x2: 0, y2: 1,
-                        stop: 0 #ffffff, stop: 1 #f0f0f0
-                    );
+                    background-color: #ffefef;
                     color: #333333;
-                    border: 2px solid #c0c0c0;
+                    border: 2px solid #ff7777;
                     border-radius: 15px;
-                    padding: 12px 18px;
+                    padding: 12px 16px;
                     font-size: 14px;
                     font-weight: bold;
-                    min-width: 200px;
-                    max-width: 300px;
                 }
             """)
+            
+            # Add drop shadow
+            shadow = QGraphicsDropShadowEffect(self.popup)
+            shadow.setBlurRadius(15)
+            shadow.setColor(QColor(0, 0, 0, 80))
+            shadow.setOffset(2, 2)
+            self.popup.setGraphicsEffect(shadow)
 
             self.popup.adjustSize()
-            self.update_popup_position()
             self.popup.show()
 
-            self.popup_update_timer = QTimer(self)
-            self.popup_update_timer.timeout.connect(self.update_popup_position)
-            self.popup_update_timer.start(16)  # Update at ~60fps
-
-            self.popup_timer = QTimer()
-            self.popup_timer.setSingleShot(True)
-            self.popup_timer.timeout.connect(self.cleanup_popup)
-            self.popup_timer.start(3000)
+            # Single resize to account for shadow
+            self.popup.resize(self.popup.width() + 8, self.popup.height() + 8)
+            
+            self.update_popup_position()
+            # ...existing code...
         except Exception as e:
             print(f"Error showing popup: {e}")
 
@@ -198,12 +204,16 @@ class VirtualCat(QWidget):
         if hasattr(self, 'popup') and self.popup and self.popup.isVisible():
             self.popup.adjustSize()
             cat_pos = self.mapToGlobal(QPoint(0, 0))
-            popup_x = cat_pos.x() + (self.width() - self.popup.width()) // 2
-            popup_y = cat_pos.y() - self.popup.height() - 10
+            
+            # Add padding for shadow in position calculation
+            popup_x = cat_pos.x() + (self.width() - self.popup.width()) // 2 + 5
+            popup_y = cat_pos.y() - self.popup.height() - 15
+            
             # Ensure popup stays within screen bounds
             screen = QApplication.primaryScreen().availableGeometry()
-            popup_x = max(0, min(popup_x, screen.width() - self.popup.width()))
-            popup_y = max(0, min(popup_y, screen.height() - self.popup.height()))
+            popup_x = max(5, min(popup_x, screen.width() - self.popup.width() - 5))
+            popup_y = max(5, min(popup_y, screen.height() - self.popup.height() - 5))
+            
             self.popup.move(popup_x, popup_y)
 
     def random_move(self):
@@ -284,33 +294,33 @@ class VirtualCat(QWidget):
         if not (event.buttons() & Qt.LeftButton) or self.drag_start_position is None:
             return
             
-        # Move window to new position
-        new_pos = event.globalPos() - self.drag_start_position
-        
-        # Keep within screen bounds
-        screen = QApplication.primaryScreen().availableGeometry()
-        new_x = max(0, min(new_pos.x(), screen.width() - self.width()))
-        new_y = max(0, min(new_pos.y(), screen.height() - self.height()))
-        
-        self.move(new_x, new_y)
-        self.update_popup_position()
+        try:
+            # Move window to new position
+            new_pos = event.globalPos() - self.drag_start_position
+            
+            # Keep within screen bounds
+            screen = QApplication.primaryScreen().availableGeometry()
+            new_x = max(0, min(new_pos.x(), screen.width() - self.width()))
+            new_y = max(0, min(new_pos.y(), screen.height() - self.height()))
+            
+            self.move(new_x, new_y)
+            self.update_popup_position()
 
-        # Calculate speed for messages
-        current_time = QTime.currentTime().msecsSinceStartOfDay()
-        if self.last_move_time and current_time - self.last_move_time > 100:
-            try:
+            # Limit popup frequency during drag
+            current_time = QTime.currentTime().msecsSinceStartOfDay()
+            if self.last_move_time and current_time - self.last_move_time > 500:  # Increased threshold
                 if self.last_move_pos:
                     speed = (event.globalPos() - self.last_move_pos).manhattanLength()
-                    if speed > 100:
+                    if speed > 100 and not self.popup:  # Only show if no popup visible
                         self.show_popup(random.choice(self.drag_messages['fast_moving']))
-                    elif speed > 50:
+                    elif speed > 50 and not self.popup:  # Only show if no popup visible
                         self.show_popup(random.choice(self.drag_messages['moving']))
-            except Exception as e:
-                print(f"Speed calculation error: {e}")
+                        
+            self.last_move_pos = event.globalPos()
+            self.last_move_time = current_time
+        except Exception as e:
+            print(f"Drag error: {e}")
 
-        self.last_move_pos = event.globalPos()
-        self.last_move_time = current_time
-        
         if hasattr(self, 'sleep_timer'):
             self.sleep_timer.start(30 * 1000)
 
@@ -327,16 +337,37 @@ class VirtualCat(QWidget):
             self.last_move_time = 0
 
     def closeEvent(self, event):
-        # Proper cleanup with error handling
+        """Ensure proper cleanup of all resources"""
         try:
-            if hasattr(self, 'movement_timer'):
-                self.movement_timer.stop()
+            # Stop all timers
+            for timer in [self.sleep_timer, self.wake_timer, 
+                         self.movement_timer, self.popup_timer, 
+                         self.popup_update_timer]:
+                if hasattr(self, timer.__name__):
+                    timer.stop()
+                    timer.deleteLater()
+
+            # Stop animation
             if hasattr(self, 'animation'):
                 self.animation.stop()
-            # ...existing cleanup code...
+
+            # Stop all movies
+            for movie in [self.idle_movie, self.sleep_movie, 
+                         self.talk_movie, self.loading_movie]:
+                if movie:
+                    movie.stop()
+
+            # Clear labels
+            if hasattr(self, 'cat_label'):
+                self.cat_label.clear()
+                self.cat_label.deleteLater()
+            
+            self.cleanup_popup()
+
         except Exception as e:
             print(f"Cleanup error: {e}")
         super().closeEvent(event)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
