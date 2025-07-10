@@ -1,14 +1,13 @@
 import sys
 import os
-
 import random
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget
 from PyQt5.QtGui import QMovie
-from PyQt5.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QSize
+from PyQt5.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QSize, QTime
 
 class PopupLabel(QLabel):
     def __init__(self, parent=None):
-        super().__init__(parent)  # Use super() instead of direct init
+        QLabel.__init__(self, parent)
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -20,18 +19,18 @@ class PopupLabel(QLabel):
 
 class VirtualCat(QWidget):
     def __init__(self):
-        super().__init__()  # Use super() instead of direct init
+        QWidget.__init__(self)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         # Initialize messages
-        self.drag_messages = [
-            "Meoooow! Put me down!",
-            "Hey! I was napping there!",
-            "Wheeeee!",
-            "Not the tail, not the tail!",
-            "I'm getting dizzy..."
-        ]
+        self.drag_messages = {
+            'start': ["Meoooow! Put me down!", "Hey, what are you doing?"],
+            'sleep_interrupt': ["Hey! I was napping there!", "Five more minutes please..."],
+            'moving': ["Wheeeee!", "I can fly!", "Higher, higher!"],
+            'fast_moving': ["Not the tail, not the tail!", "I'm getting dizzy...", "Too fast!"],
+            'drop': ["Thanks for the ride!", "That was fun!", "Phew, solid ground!"]
+        }
 
         # Initialize all resources before use
         self.popup = None
@@ -40,6 +39,8 @@ class VirtualCat(QWidget):
         self.movie = None
         self.is_sleeping = False
         self.drag_start_position = None
+        self.last_move_pos = None
+        self.last_move_time = 0
 
         # Initialize state flags
         self.is_initialized = False
@@ -264,45 +265,66 @@ class VirtualCat(QWidget):
         # Restart sleep timer
         self.sleep_timer.start()
 
-    def mousePressEvent(self, event):  # Fix method name
+    def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.drag_start_position = event.globalPos()
+            # Store initial click position and window position
+            self.drag_start_position = QPoint(event.globalPos() - self.frameGeometry().topLeft())
             self.animation.stop()
             if not self.is_sleeping:
-                self.show_popup(random.choice(self.drag_messages))
+                self.show_popup(random.choice(self.drag_messages['start']))
+            else:
+                self.is_sleeping = False
+                self.wake_timer.stop()
+                self.show_popup(random.choice(self.drag_messages['sleep_interrupt']))
+                self.movie = self.idle_movie
+                self.cat_label.setMovie(self.movie)
+                self.movie.start()
 
     def mouseMoveEvent(self, event):
         if not (event.buttons() & Qt.LeftButton) or self.drag_start_position is None:
             return
             
-        # Calculate new position with proper error checking
-        try:
-            current_pos = event.globalPos()
-            delta = current_pos - self.drag_start_position
-            new_pos = self.pos() + delta
-            self.drag_start_position = current_pos  # Update drag position
-            
-            # Keep within screen bounds
-            screen = QApplication.primaryScreen().availableGeometry()
-            new_x = max(0, min(new_pos.x(), screen.width() - self.width()))
-            new_y = max(0, min(new_pos.y(), screen.height() - self.height()))
-            
-            self.move(new_x, new_y)
-            self.update_popup_position()
-            
-            if hasattr(self, 'sleep_timer'):
-                self.sleep_timer.start(30 * 1000)
-        except Exception as e:
-            print(f"Drag error: {e}")
-            self.drag_start_position = None
+        # Move window to new position
+        new_pos = event.globalPos() - self.drag_start_position
+        
+        # Keep within screen bounds
+        screen = QApplication.primaryScreen().availableGeometry()
+        new_x = max(0, min(new_pos.x(), screen.width() - self.width()))
+        new_y = max(0, min(new_pos.y(), screen.height() - self.height()))
+        
+        self.move(new_x, new_y)
+        self.update_popup_position()
+
+        # Calculate speed for messages
+        current_time = QTime.currentTime().msecsSinceStartOfDay()
+        if self.last_move_time and current_time - self.last_move_time > 100:
+            try:
+                if self.last_move_pos:
+                    speed = (event.globalPos() - self.last_move_pos).manhattanLength()
+                    if speed > 100:
+                        self.show_popup(random.choice(self.drag_messages['fast_moving']))
+                    elif speed > 50:
+                        self.show_popup(random.choice(self.drag_messages['moving']))
+            except Exception as e:
+                print(f"Speed calculation error: {e}")
+
+        self.last_move_pos = event.globalPos()
+        self.last_move_time = current_time
+        
+        if hasattr(self, 'sleep_timer'):
+            self.sleep_timer.start(30 * 1000)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             if self.drag_start_position is not None:
                 distance = (event.pos() - self.drag_start_position).manhattanLength()
-                if distance < 3:  # If barely moved, count as click
-                    self.show_popup("Meow!")  # Replace water increment with simple meow
+                if distance > 3:  # If actually dragged
+                    self.show_popup(random.choice(self.drag_messages['drop']))
+                else:  # If just clicked
+                    self.show_popup("Meow!")
             self.drag_start_position = None
+            self.last_move_pos = None
+            self.last_move_time = 0
 
     def closeEvent(self, event):
         # Proper cleanup with error handling
