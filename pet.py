@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve, Q
 
 class PopupLabel(QLabel):
     def __init__(self, parent=None):
-        super(PopupLabel, self).__init__(parent)
+        QLabel.__init__(self, parent)  # Changed to direct init
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -19,7 +19,7 @@ class PopupLabel(QLabel):
 
 class VirtualCat(QWidget):
     def __init__(self):
-        super(VirtualCat, self).__init__(parent=None)
+        QWidget.__init__(self)  # Changed to direct init
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -34,8 +34,8 @@ class VirtualCat(QWidget):
 
         # Initialize all resources before use
         self.popup = None
-        self.popup_timer = None
-        self.popup_update_timer = None
+        self.popup_timer = QTimer()  # Initialize timer in constructor
+        self.popup_update_timer = QTimer()
         self.movie = None
         self.is_sleeping = False
         self.drag_start_position = None
@@ -59,7 +59,7 @@ class VirtualCat(QWidget):
 
         self.animation = QPropertyAnimation(self, b"pos")
         self.animation.setEasingCurve(QEasingCurve.InOutQuad)
-        self.animation.setDuration(3000)  # 3 seconds movement duration for slower movement
+        self.animation.setDuration(3500)  # Changed to 3.5 seconds for moderate movement
 
         self.show()
         # Show welcome message after initialization
@@ -96,7 +96,7 @@ class VirtualCat(QWidget):
         self.movement_timer.timeout.connect(self.random_move)
 
         self.sleep_timer.start(30 * 1000)
-        self.movement_timer.start(15000)
+        self.movement_timer.start(20000)  # Changed to 20 seconds between moves
 
     def _load_movie(self, path):
         """Safely load and validate movie file"""
@@ -129,12 +129,12 @@ class VirtualCat(QWidget):
     def show_popup(self, message):
         """Thread-safe popup display"""
         if hasattr(self, 'popup') and self.popup:
-            # Queue message instead of showing immediately if popup exists
             self.popup_message_queue.append(message)
             return
             
         try:
-            self.cleanup_popup()  # Clean existing popup first
+            self.cleanup_popup()
+
             if not self.is_sleeping:
                 self._switch_animation(self.talk_movie)
 
@@ -164,41 +164,95 @@ class VirtualCat(QWidget):
 
             self.popup.adjustSize()
             self.popup.show()
-
-            # Single resize to account for shadow
-            self.popup.resize(self.popup.width() + 8, self.popup.height() + 8)
-            
             self.update_popup_position()
-            # ...existing code...
+
+            # Properly handle timers
+            if self.popup_timer and self.popup_timer.isActive():
+                self.popup_timer.stop()
+            
+            self.popup_timer = QTimer(self)
+            self.popup_timer.setSingleShot(True)
+            self.popup_timer.timeout.connect(self.cleanup_and_next_message)
+            self.popup_timer.start(2000)
+
+            if self.popup_update_timer and self.popup_update_timer.isActive():
+                self.popup_update_timer.stop()
+                
+            self.popup_update_timer = QTimer(self)
+            self.popup_update_timer.timeout.connect(self.update_popup_position)
+            self.popup_update_timer.start(16)
+
         except Exception as e:
             print(f"Error showing popup: {e}")
+            self.cleanup_popup()  # Ensure cleanup on error
 
-    def _switch_animation(self, new_movie):
-        """Safely switch between animations"""
-        if self.movie != new_movie:
-            self.movie = new_movie
-            self.cat_label.setMovie(self.movie)
-            self.movie.start()
-
-    def cleanup_popup(self):
+    def cleanup_and_next_message(self):
+        """Handle cleanup and show next message if any"""
         try:
-            if hasattr(self, 'popup_update_timer'):
-                self.popup_update_timer.stop()
-                self.popup_update_timer.deleteLater()
-            if hasattr(self, 'popup_timer'):
-                self.popup_timer.stop()
-                self.popup_timer.deleteLater()
+            # Cleanup current popup
             if hasattr(self, 'popup'):
                 self.popup.hide()
                 self.popup.deleteLater()
                 self.popup = None
-        except Exception:
-            pass
+
+            # Show next message after a short delay
+            if self.popup_message_queue:
+                next_message = self.popup_message_queue.pop(0)
+                QTimer.singleShot(200, lambda: self.show_popup(next_message))
+            else:
+                if not self.is_sleeping:
+                    self._switch_animation(self.idle_movie)
+        except Exception as e:
+            print(f"Error in cleanup: {e}")
+
+    def show_next_message(self):
+        """Show next message in queue or cleanup if none"""
+        try:
+            if self.popup_message_queue:
+                next_message = self.popup_message_queue.pop(0)
+                self.cleanup_popup()
+                self.show_popup(next_message)
+            else:
+                self.cleanup_popup()
+        except Exception as e:
+            print(f"Error showing next message: {e}")
+            self.cleanup_popup()
+
+    def _switch_animation(self, new_movie):
+        """Safely switch between animations"""
+        if self.movie == new_movie:
+            return
+            
+        try:
+            old_movie = self.movie
+            self.movie = new_movie
+            self.cat_label.setMovie(new_movie)
+            new_movie.start()
+            
+            if old_movie and old_movie != new_movie:
+                old_movie.stop()
+        except Exception as e:
+            print(f"Animation switch error: {e}")
+            if self.idle_movie and self.idle_movie.isValid():
+                self.movie = self.idle_movie
+                self.cat_label.setMovie(self.idle_movie)
+                self.idle_movie.start()
+
+    def cleanup_popup(self):
+        try:
+            if self.popup_update_timer and self.popup_update_timer.isActive():
+                self.popup_update_timer.stop()
+            if self.popup_timer and self.popup_timer.isActive():
+                self.popup_timer.stop()
+            if self.popup:
+                self.popup.hide()
+                self.popup.deleteLater()
+                self.popup = None
+        except Exception as e:
+            print(f"Cleanup error: {e}")
         finally:
             if not self.is_sleeping:
-                self.movie = self.idle_movie
-                self.cat_label.setMovie(self.movie)
-                self.movie.start()
+                self._switch_animation(self.idle_movie)
 
     def update_popup_position(self):
         if hasattr(self, 'popup') and self.popup and self.popup.isVisible():
@@ -308,21 +362,22 @@ class VirtualCat(QWidget):
 
             # Limit popup frequency during drag
             current_time = QTime.currentTime().msecsSinceStartOfDay()
-            if self.last_move_time and current_time - self.last_move_time > 500:  # Increased threshold
+            if self.last_move_time and current_time - self.last_move_time > 500:
                 if self.last_move_pos:
                     speed = (event.globalPos() - self.last_move_pos).manhattanLength()
-                    if speed > 100 and not self.popup:  # Only show if no popup visible
+                    if speed > 100 and not self.popup:
                         self.show_popup(random.choice(self.drag_messages['fast_moving']))
-                    elif speed > 50 and not self.popup:  # Only show if no popup visible
+                    elif speed > 50 and not self.popup:
                         self.show_popup(random.choice(self.drag_messages['moving']))
                         
             self.last_move_pos = event.globalPos()
             self.last_move_time = current_time
+            
+            if hasattr(self, 'sleep_timer'):
+                self.sleep_timer.start(30 * 1000)
+                
         except Exception as e:
             print(f"Drag error: {e}")
-
-        if hasattr(self, 'sleep_timer'):
-            self.sleep_timer.start(30 * 1000)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -367,7 +422,6 @@ class VirtualCat(QWidget):
         except Exception as e:
             print(f"Cleanup error: {e}")
         super().closeEvent(event)
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
