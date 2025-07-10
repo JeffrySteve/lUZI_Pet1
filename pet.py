@@ -36,7 +36,15 @@ class VirtualCat(QWidget):
 
         self.load_water_log()
 
-        self.cat_label.mousePressEvent = self.increment_water_intake
+        self.cat_label.mousePressEvent = self.handle_mouse_press
+        self.drag_start_position = None
+        self.drag_messages = [
+            "Meoooow! Put me down!",
+            "Hey! I was napping there!",
+            "Wheeeee!",
+            "Not the tail, not the tail!",
+            "I'm getting dizzy..."
+        ]
 
         self.reminder_timer = QTimer()
         self.reminder_timer.timeout.connect(self.show_reminder)
@@ -53,13 +61,23 @@ class VirtualCat(QWidget):
         self.is_sleeping = False
         self.idle_movie = self.movie
         self.sleep_movie = QMovie("assets/sleepy_cat.gif")
+        self.talk_movie = QMovie("assets/cat.gif")  # Add talking animation
         self.sleep_movie.setScaledSize(self.cat_size)  # Set sleep gif to same size
+        self.talk_movie.setScaledSize(self.cat_size)
         
         self.animation = QPropertyAnimation(self, b"pos")
         self.animation.setEasingCurve(QEasingCurve.InOutQuad)
         self.animation.setDuration(3000)  # 3 seconds movement duration for slower movement
 
         self.show()
+        # Show welcome message after initialization
+        welcome_messages = [
+            "Hello hooman! I'm here to help you stay hydrated!",
+            "Meow! Let's work together today!",
+            "Hi friend! Don't forget to drink water!",
+            "Purr~ I'll keep you company today!"
+        ]
+        self.show_popup(random.choice(welcome_messages))
 
     def load_water_log(self):
         today = QDate.currentDate().toString(Qt.ISODate)
@@ -94,11 +112,60 @@ class VirtualCat(QWidget):
         self.show_popup(message)
 
     def show_popup(self, message):
-        self.popup = QLabel(message, self)
-        self.popup.setStyleSheet("background-color: rgba(255, 255, 255, 200); color: black; border: 1px solid gray; padding: 5px;")
-        self.popup.move(0, -30)
+        # Switch to talking animation
+        if not self.is_sleeping:
+            self.movie = self.talk_movie
+            self.cat_label.setMovie(self.movie)
+            self.movie.start()
+
+        # Safely delete existing popup
+        try:
+            if hasattr(self, 'popup') and self.popup:
+                self.popup.hide()
+                self.popup.deleteLater()
+        except:
+            pass
+            
+        # Create new popup with proper parenting
+        self.popup = QLabel(self)
+        self.popup.setText(message)
+        self.popup.setWordWrap(True)  # Enable word wrapping
+        self.popup.setStyleSheet("""
+            QLabel {
+                background-color: rgba(255, 255, 255, 0.95);
+                color: #000000;
+                border: 2px solid #808080;
+                border-radius: 15px;
+                padding: 12px 18px;
+                font-size: 14px;
+                font-weight: bold;
+                min-width: 150px;
+                max-width: 300px;
+            }
+        """)
+        
+        # Ensure proper sizing and positioning
+        self.popup.adjustSize()
+        popup_x = (self.width() - self.popup.width()) // 2
+        popup_y = -self.popup.height() - 10
+        self.popup.move(popup_x, popup_y)
+        
+        # Ensure visibility
+        self.popup.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.popup.raise_()
         self.popup.show()
-        QTimer.singleShot(3000, self.popup.deleteLater)
+        
+        # Single cleanup timer
+        def cleanup():
+            if hasattr(self, 'popup') and self.popup:
+                self.popup.deleteLater()
+                self.popup = None
+            if not self.is_sleeping:
+                self.movie = self.idle_movie
+                self.cat_label.setMovie(self.movie)
+                self.movie.start()
+                
+        QTimer.singleShot(3000, cleanup)  # Increased display time to 3 seconds
 
     def random_move(self):
         screen = QApplication.primaryScreen().availableGeometry()
@@ -145,6 +212,39 @@ class VirtualCat(QWidget):
         self.random_move()
         # Restart sleep timer
         self.sleep_timer.start()
+
+    def handle_mouse_press(self, event):
+        if event.button() == Qt.LeftButton:
+            # Store initial position relative to window
+            self.drag_start_position = event.pos()
+            self.animation.stop()
+            if not self.is_sleeping:
+                self.show_popup(random.choice(self.drag_messages))
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self.drag_start_position is not None:
+            # Reset sleep timer when dragging
+            self.sleep_timer.start(30 * 1000)
+            
+            # Calculate movement delta
+            delta = event.pos() - self.drag_start_position
+            new_pos = self.pos() + delta
+            
+            # Keep cat within screen bounds
+            screen = QApplication.primaryScreen().availableGeometry()
+            new_x = max(0, min(new_pos.x(), screen.width() - self.width()))
+            new_y = max(0, min(new_pos.y(), screen.height() - self.height()))
+            
+            self.move(new_x, new_y)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # Check if we actually dragged
+            if self.drag_start_position is not None:
+                distance = (event.pos() - self.drag_start_position).manhattanLength()
+                if distance < 3:  # If barely moved, count as click
+                    self.increment_water_intake(event)
+            self.drag_start_position = None
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
