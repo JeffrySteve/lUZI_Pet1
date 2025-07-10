@@ -1,3 +1,4 @@
+import winreg
 import sys
 import os
 import random
@@ -20,6 +21,8 @@ class PopupLabel(QLabel):
 class VirtualCat(QWidget):
     def __init__(self):
         QWidget.__init__(self)  # Changed to direct init
+        # Add startup registry setup
+        self.setup_startup()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -423,6 +426,27 @@ class VirtualCat(QWidget):
             print(f"Cleanup error: {e}")
         super().closeEvent(event)
 
+    def setup_startup(self):
+        """Set up the application to run at startup"""
+        try:
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, 
+                               winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE)
+            
+            app_path = sys.executable
+            app_name = "VirtualCat"
+            
+            try:
+                # Check if already in startup
+                winreg.QueryValueEx(key, app_name)
+            except WindowsError:
+                # Add to startup if not present
+                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, f'"{app_path}"')
+            
+            winreg.CloseKey(key)
+        except Exception as e:
+            print(f"Failed to set up startup: {e}")
+            
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     cat = VirtualCat()
