@@ -1,5 +1,3 @@
-Sure, here's the contents for the file: /pet-app/pet-app/setup.py
-
 from setuptools import setup
 
 setup(
